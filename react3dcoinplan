@@ -1,0 +1,300 @@
+# React 3D Coin App Plan (One-shot Build)
+
+## Objective
+Create a React app that generates and displays a realistic 3D coin with engraved depth that reads while rotating. The user can choose between:
+1) Egyptian-style bronze coin
+2) American-style matte silver dollar coin
+
+Flow:
+- User selects style (Egyptian or Silver Dollar)
+- User clicks "Generate coin" to instantiate that coin
+- User can click-drag to rotate freely on X and Y, with inertia after release
+- User can click "Align upright (Y)" to smoothly reset to the default front-facing upright orientation
+
+Constraints:
+- Desktop only (mouse/trackpad), no mobile requirements
+- Rotation only, zoom disabled
+
+## Tech Stack
+- React + Vite (TypeScript)
+- three + @react-three/fiber + @react-three/drei
+- No external assets, all textures generated procedurally at runtime using HTML Canvas
+
+Dependencies:
+- three
+- @react-three/fiber
+- @react-three/drei
+
+## Project Setup
+1) Create Vite React TS project
+2) Install deps
+3) Implement layout with a left control panel and a main 3D canvas
+
+Suggested scripts:
+- dev, build, preview
+
+## UI Requirements
+Left panel:
+- Style selector (radio or segmented):
+  - Egyptian (bronze)
+  - Silver Dollar (matte silver)
+- Button: "Generate coin"
+- Button: "Align upright (Y)" (reset orientation)
+- Small text readout (optional):
+  - current style, generated style
+  - inertia on/off (fixed on, but can show)
+
+Main area:
+- 3D Canvas, centered coin, good lighting and reflections
+- No zoom, no pan
+
+## 3D Rendering Requirements
+
+### Coin Geometry
+Create a coin mesh as a group with:
+- Body: CylinderGeometry(radius, radius, thickness, radialSegments)
+- Bevel/rim: approximate with additional thin torus rings or a second slightly larger cylinder to fake a raised rim
+- Faces: use two circle meshes (or a thin cylinder with UVs), but easiest:
+  - One cylinder for body
+  - Two separate circular meshes slightly offset on +Z and -Z for front/back faces, so each can have its own material/texture
+
+Recommended values:
+- radius: 1
+- thickness: 0.18
+- radialSegments: 96 (smooth edge)
+- faceOffset: 0.091 (slightly above body to avoid z-fighting)
+
+### Materials (PBR Metal Look)
+Use MeshStandardMaterial for each face and body:
+- Environment reflections via drei <Environment preset="city" /> (or "studio")
+- Add directional light + ambient light for crisp engraved highlights
+
+Body material:
+- Egyptian: bronze-like (metalness high, roughness medium)
+- Silver dollar: silver/steel-like (metalness high, roughness higher for matte)
+
+Face materials:
+- Use procedural CanvasTexture as map (albedo)
+- Use normalMap derived from a generated height map for engraved depth
+- Keep displacement off by default for reliability, but allow optional toggle in code comments if needed
+
+Normal scale should be tuned so depth reads:
+- Start with normalScale around (1.0, 1.0), then adjust per style
+
+## Procedural Texture Generation (Core Requirement)
+Generate 2 sets of textures at runtime:
+- Egyptian: front + back
+- Silver dollar: front + back
+
+For each face:
+1) Create a canvas (e.g., 1024x1024)
+2) Generate a HEIGHT map (grayscale):
+   - background mid-gray baseline
+   - raised elements near white
+   - recessed details near black
+   - smooth edges with blur for natural relief
+3) Generate an ALBEDO map:
+   - subtle metal base color
+   - darker/lighter variations, patina speckles for bronze
+   - micro noise for silver matte
+
+4) Convert height map -> normal map in code:
+   - Sample neighboring pixels (sobel-like) to compute gradient
+   - Encode normal as RGB: (nx, ny, nz)
+   - Normalize vectors
+   - Output another canvas as normal map
+
+5) Create Three.js textures:
+   - new THREE.CanvasTexture(canvas)
+   - set anisotropy if available
+   - set wrap modes to ClampToEdge
+   - set colorSpace appropriately (albedo: SRGBColorSpace, normal: Linear)
+
+### Egyptian Coin Face Design (Procedural)
+Front:
+- Center motif: stylized pharaoh profile silhouette or an eye-like symbol
+- Outer ring: repeating triangular ticks and dot separators
+- Add faux hieroglyph band: small vertical rectangles and simple glyph-like marks around perimeter
+- Raised rim ring near edge (height map)
+
+Back:
+- Center motif: scarab-like oval with wings (simple symmetric shapes)
+- Outer ring: radial sun rays (thin raised lines)
+- Random small nicks/scratches in height map for realism
+
+Color/feel:
+- Bronze base with patina speckles (greenish/darker spots in albedo)
+- Slightly higher roughness than polished metal
+
+### Silver Dollar Face Design (Procedural)
+Front:
+- Center motif: stylized liberty profile (simple vector silhouette) or a star + laurel
+- Perimeter: 13 stars spaced around ring (raised)
+- Text is not required and should be avoided for this test (no readable typography), use abstract bands instead
+
+Back:
+- Center motif: eagle-like abstract: shield + wings simplified into geometric forms
+- Perimeter: dot ring + rim
+
+Color/feel:
+- Matte silver, subtle noise, faint radial brushing (albedo)
+- Higher roughness for softer reflections, but keep enough specular to show normal detail
+
+## Interaction Requirements (Click-Drag Rotation + Inertia)
+Implement custom rotation controls (not OrbitControls) to meet:
+- Drag rotates coin on X and Y
+- Rotation speed reflects drag speed
+- Inertia continues after release, decays smoothly
+- Zoom disabled
+
+Implementation details:
+- Store rotation as Quaternion on the coin group to avoid gimbal issues
+- Pointer state:
+  - isDragging
+  - lastX, lastY
+  - velocityX, velocityY (angular velocity)
+  - lastTime
+- On pointer down:
+  - capture pointer
+  - set dragging true, zero velocities
+- On pointer move while dragging:
+  - compute dx, dy, dt
+  - convert to angular deltas:
+    - rotY += dx * sensitivity
+    - rotX += dy * sensitivity
+  - update velocities based on dx/dt, dy/dt
+  - apply to quaternion using incremental axis-angle rotations:
+    - qY from axis (0,1,0)
+    - qX from axis (1,0,0)
+    - coinQuat = qY * qX * coinQuat (order chosen to feel natural)
+- On pointer up:
+  - dragging false, keep velocity for inertia
+- In animation loop (useFrame):
+  - if not dragging:
+    - apply velocity-based rotation each frame
+    - decay velocities: velocity *= pow(decayFactor, dt)
+    - stop when below epsilon
+
+Suggested parameters:
+- sensitivity: 0.005 to 0.01 (tune)
+- inertiaDecayPerSecond: 0.85 to 0.93 (tune)
+- maxVelocity clamp to prevent crazy spins
+
+## Align Upright (Y) Requirement (Reset)
+Button resets coin to a default orientation smoothly:
+- Target: identity quaternion (front-facing upright)
+- Animate over ~350ms
+- Use slerp from current quaternion to target quaternion
+
+Implementation:
+- On click:
+  - store startQuat, startTime
+  - set aligning flag
+- In useFrame:
+  - if aligning:
+    - t = (now-start)/duration
+    - coinQuat.slerpQuaternions(startQuat, targetQuat, easeInOut(t))
+    - stop at t>=1
+- While aligning:
+  - disable dragging or allow it to cancel align (prefer cancel align on new pointer down)
+
+## File Structure
+- src/main.tsx
+- src/App.tsx
+- src/components/CoinScene.tsx
+- src/components/Coin.tsx
+- src/lib/proceduralTextures.ts
+- src/lib/heightToNormal.ts
+- src/hooks/useDragInertiaRotation.ts
+- src/styles.css
+
+## Component Responsibilities
+
+### App.tsx
+- Holds UI state:
+  - selectedStyle: 'egyptian' | 'silver'
+  - generatedStyle: same | null
+- Buttons:
+  - Generate sets generatedStyle = selectedStyle
+  - Align triggers a ref method on Coin to start align animation
+- Layout: sidebar + canvas
+
+### CoinScene.tsx
+- R3F <Canvas> setup:
+  - camera positioned slightly above and in front
+  - pixel ratio set
+  - lights + environment
+- Renders <Coin style={generatedStyle} />
+
+### Coin.tsx
+- Builds geometry group:
+  - body mesh
+  - front face mesh
+  - back face mesh
+- Loads procedural textures for the given style:
+  - generate once per style, memoize
+- Applies materials
+- Uses useDragInertiaRotation hook on the group ref
+- Exposes align method via forwardRef or callback prop
+
+### proceduralTextures.ts
+- Functions:
+  - generateCoinTextures(style): returns { front: {map, normalMap}, back: {map, normalMap}, bodyColor, roughness }
+  - Internally:
+    - drawHeightEgyptianFront(), drawHeightEgyptianBack()
+    - drawAlbedoEgyptianFront(), etc.
+    - same for silver
+  - Add optional helpers:
+    - addNoise(canvas, amount)
+    - drawRingTicks(ctx)
+    - blur pass (simple box blur or canvas filter if supported)
+
+### heightToNormal.ts
+- convertHeightCanvasToNormalCanvas(heightCanvas, strength):
+  - read pixels
+  - compute gradients using neighboring samples
+  - produce normal RGB
+  - return normal canvas
+
+### useDragInertiaRotation.ts
+- Attaches pointer handlers to a target element:
+  - Prefer attach to the canvas DOM element via events, or use R3F pointer events on an invisible plane
+- Updates quaternion in a provided ref
+
+Implementation detail choice:
+- Use R3F pointer events directly on the coin group:
+  - onPointerDown, onPointerMove, onPointerUp
+  - call e.stopPropagation()
+  - store pointer capture using (e.target as any).setPointerCapture(e.pointerId) when possible
+
+## Default Visual Settings
+- Camera: position [0, 0.6, 3]
+- Coin position: [0, 0, 0]
+- Lights:
+  - ambient intensity ~ 0.4
+  - directional light intensity ~ 1.1 positioned [3, 3, 3]
+  - optional rim light [ -3, 2, -2 ]
+- Environment preset: "studio" or "city"
+- Background: neutral dark gray (via CSS or Canvas clear color)
+
+## Acceptance Checklist
+- App boots with UI + blank scene or placeholder
+- Selecting style and clicking Generate shows that coin style
+- Coin has visible engraved depth when rotating (normal mapping)
+- Click-drag rotates coin on X and Y smoothly
+- Releasing continues rotation with inertia, slows to stop
+- Align upright resets to default orientation with smooth animation
+- Zoom is disabled
+- No external image assets required
+
+## Notes for Implementation Reliability
+- Ensure textures update: set texture.needsUpdate = true
+- Use correct colorSpace for albedo
+- Keep height->normal strength moderate to avoid noisy shading
+- If performance issues, reduce canvas size to 512 and increase anisotropy
+
+## Deliverable
+Produce a complete working codebase with all files, ready to run:
+- npm install
+- npm run dev
+Include brief README with run instructions.
